@@ -7,5 +7,12 @@ load_dotenv()
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 TIMEZONE = "Asia/Yekaterinburg"
 
+# Список администраторов по умолчанию (username без @)
+DEFAULT_ADMINS = ["mirvien", "ashuxtoff"]
+
+# Список тестовых пользователей по умолчанию (username без @)
+# Эти пользователи будут созданы как неактивные сотрудники при инициализации БД
+DEFAULT_TEST_USERS = ["mfilaeff"]
+
 if not BOT_TOKEN:
     raise ValueError("BOT_TOKEN не найден в переменных окружения")

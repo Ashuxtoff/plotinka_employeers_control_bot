@@ -4,9 +4,6 @@ __pycache__/
 *$py.class
 *.so
 .Python
-env/
-venv/
-ENV/
 build/
 develop-eggs/
 dist/
@@ -23,18 +20,11 @@ wheels/
 .installed.cfg
 *.egg
 
-# Окружение
-.env
-.venv/
-
-# База данных
-*.db
-*.sqlite
-*.sqlite3
-
-# Логи
-*.log
-logs/
+# Virtual environments
+venv/
+env/
+ENV/
+.venv
 
 # IDE
 .vscode/
@@ -42,6 +32,31 @@ logs/
 *.swp
 *.swo
 *~
+
+# Environment variables
+.env
+.env.local
+
+# Database
+*.db
+*.sqlite
+*.sqlite3
+
+# Testing
+.pytest_cache/
+.coverage
+htmlcov/
+.tox/
+.coverage.*
+.cache
+nosetests.xml
+coverage.xml
+*.cover
+.hypothesis/
+
+# Logs
+*.log
+logs/
 
 # OS
 .DS_Store

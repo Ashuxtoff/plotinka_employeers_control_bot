@@ -1,0 +1,14 @@
+# Pre-commit hooks отключены
+# Тесты можно запускать вручную через: pytest -v --cov=bot --cov-report=term-missing
+# repos:
+#   - repo: local
+#     hooks:
+#       - id: pytest
+#         name: pytest
+#         entry: pytest
+#         language: system
+#         pass_filenames: false
+#         always_run: true
+#         args: ['-v', '--tb=short']
+#         stages: [commit]
+
