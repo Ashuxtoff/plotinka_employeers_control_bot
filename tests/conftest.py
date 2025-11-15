@@ -4,6 +4,7 @@ import pytest
 import aiosqlite
 from unittest.mock import AsyncMock, MagicMock
 from aiogram.types import User, Message, Chat
+from aiogram.fsm.context import FSMContext
 
 from bot.database import init_db, DB_PATH
 
@@ -84,6 +85,18 @@ def mock_message(mock_user, mock_chat):
     message.answer = AsyncMock()
     message.reply = AsyncMock()
     return message
+
+
+@pytest.fixture
+def mock_state():
+    """Создаёт мок FSMContext."""
+    state = AsyncMock(spec=FSMContext)
+    state.data = {}
+    state.update_data = AsyncMock()
+    state.set_state = AsyncMock()
+    state.get_data = AsyncMock(return_value={})
+    state.clear = AsyncMock()
+    return state
 
 
 @pytest.fixture

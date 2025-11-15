@@ -1,7 +1,7 @@
 """Модуль для работы с базой данных."""
 import aiosqlite
 import logging
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Optional, List, Dict, Any
 import pytz
 
@@ -412,6 +412,75 @@ async def add_work_day(tg_id: int, date: str, status: str) -> bool:
         await db.commit()
         logger.info(f"Рабочий день добавлен/обновлён: tg_id={tg_id}, date={date}, status={status}")
         return True
+
+
+async def set_range_work_days(
+    tg_id: int,
+    start_date: str,
+    end_date: str,
+    status: str,
+    max_days: int = 365
+) -> bool:
+    """
+    Массово проставить статус в таблице work_days на диапазон дат.
+
+    Args:
+        tg_id: Telegram ID пользователя
+        start_date: Начальная дата в формате YYYY-MM-DD
+        end_date: Конечная дата в формате YYYY-MM-DD
+        status: Статус для установки
+        max_days: Максимальная длина диапазона (по умолчанию 365)
+
+    Returns:
+        True если операция выполнена успешно
+
+    Raises:
+        ValueError: если даты в неверном порядке или диапазон слишком велик
+    """
+    start_dt = datetime.fromisoformat(start_date).date()
+    end_dt = datetime.fromisoformat(end_date).date()
+
+    if start_dt > end_dt:
+        raise ValueError("Дата начала диапазона не может быть позже даты окончания.")
+
+    total_days = (end_dt - start_dt).days + 1
+    if total_days > max_days:
+        raise ValueError(f"Диапазон дат превышает допустимое значение {max_days} дней.")
+
+    logger.info(
+        "Массовое обновление work_days: tg_id=%s, %s -> %s, статус=%s, дней=%s",
+        tg_id,
+        start_date,
+        end_date,
+        status,
+        total_days
+    )
+
+    async with aiosqlite.connect(DB_PATH) as db:
+        current_date = start_dt
+        while current_date <= end_dt:
+            await db.execute(
+                """
+                INSERT INTO work_days (tg_id, date, status, updated_at)
+                VALUES (?, ?, ?, ?)
+                ON CONFLICT(tg_id, date) DO UPDATE SET
+                    status = excluded.status,
+                    updated_at = excluded.updated_at
+                """,
+                (tg_id, current_date.isoformat(), status, get_current_time())
+            )
+            current_date += timedelta(days=1)
+
+        await db.commit()
+
+    logger.info(
+        "Диапазон work_days обновлён: tg_id=%s, %s -> %s, статус=%s",
+        tg_id,
+        start_date,
+        end_date,
+        status
+    )
+    return True
 
 
 async def get_work_day(tg_id: int, date: str) -> Optional[Dict[str, Any]]:

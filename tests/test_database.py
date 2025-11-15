@@ -1,3 +1,93 @@
+"""Тесты для модуля bot.database (работа с work_days)."""
+import pytest
+
+from bot.database import (
+    create_user,
+    set_range_work_days,
+    get_work_days,
+    add_work_day
+)
+
+
+USER_ID = 12345
+USERNAME = "test_user"
+NAME = "Test User"
+
+
+@pytest.fixture
+async def seeded_user(test_db):
+    """Создаёт пользователя в тестовой БД для дальнейших проверок."""
+    await create_user(
+        tg_id=USER_ID,
+        username=USERNAME,
+        name=NAME,
+        role="employee",
+        active=True
+    )
+    return USER_ID
+
+
+@pytest.mark.asyncio
+async def test_set_range_work_days_inserts_full_range(seeded_user):
+    """Диапазон дат целиком сохраняется с нужным статусом."""
+    start_date = "2025-01-01"
+    end_date = "2025-01-03"
+    status = "Отпуск"
+
+    await set_range_work_days(seeded_user, start_date, end_date, status)
+
+    work_days = await get_work_days(seeded_user, start_date, end_date)
+    assert len(work_days) == 3
+    assert all(row["status"] == status for row in work_days)
+    assert {row["date"] for row in work_days} == {"2025-01-01", "2025-01-02", "2025-01-03"}
+
+
+@pytest.mark.asyncio
+async def test_set_range_work_days_updates_existing_records(seeded_user):
+    """Существующие записи обновляются, новые добавляются."""
+    await add_work_day(seeded_user, "2025-02-01", "Офис")
+
+    await set_range_work_days(
+        tg_id=seeded_user,
+        start_date="2025-02-01",
+        end_date="2025-02-03",
+        status="Болезнь"
+    )
+
+    work_days = await get_work_days(seeded_user, "2025-02-01", "2025-02-03")
+    assert len(work_days) == 3
+    assert all(row["status"] == "Болезнь" for row in work_days)
+
+
+@pytest.mark.asyncio
+async def test_set_range_work_days_invalid_order_raises(seeded_user):
+    """Дата начала позже окончания -> ValueError и никаких записей."""
+    with pytest.raises(ValueError):
+        await set_range_work_days(
+            seeded_user,
+            start_date="2025-03-05",
+            end_date="2025-03-01",
+            status="Экспедиция"
+        )
+
+    work_days = await get_work_days(seeded_user, "2025-03-01", "2025-03-05")
+    assert work_days == []
+
+
+@pytest.mark.asyncio
+async def test_set_range_work_days_exceeds_limit_raises(seeded_user):
+    """Выход за max_days вызывает ValueError и ничего не сохраняет."""
+    with pytest.raises(ValueError):
+        await set_range_work_days(
+            seeded_user,
+            start_date="2025-04-01",
+            end_date="2025-04-05",
+            status="Отпуск",
+            max_days=2
+        )
+
+    work_days = await get_work_days(seeded_user, "2025-04-01", "2025-04-05")
+    assert work_days == []
 """Тесты для модуля database."""
 import pytest
 import aiosqlite

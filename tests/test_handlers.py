@@ -244,7 +244,7 @@ async def test_cmd_start_updates_test_user_placeholder(test_db, mock_message):
 
 # Тесты для обработчика выбора формата работы
 @pytest.mark.asyncio
-async def test_handle_work_format_success(test_db, mock_message):
+async def test_handle_work_format_success(test_db, mock_message, mock_state):
     """Тест: успешный выбор формата работы."""
     # Создаём активного пользователя с согласием
     await create_user(
@@ -258,7 +258,7 @@ async def test_handle_work_format_success(test_db, mock_message):
     
     mock_message.text = "Офис"
     
-    await work_format.handle_work_format(mock_message)
+    await work_format.handle_work_format(mock_message, mock_state)
     
     # Проверяем, что формат сохранён в БД
     today = get_today_date()
@@ -274,7 +274,7 @@ async def test_handle_work_format_success(test_db, mock_message):
 
 
 @pytest.mark.asyncio
-async def test_handle_work_format_all_formats(test_db, mock_message):
+async def test_handle_work_format_all_formats(test_db, mock_message, mock_state):
     """Тест: выбор всех форматов работы."""
     # Создаём активного пользователя с согласием
     await create_user(
@@ -292,26 +292,38 @@ async def test_handle_work_format_all_formats(test_db, mock_message):
     for format_text in WORK_FORMATS:
         mock_message.text = format_text
         mock_message.answer.reset_mock()
+        # Сбрасываем мок состояния для каждого формата
+        mock_state.get_data = AsyncMock(return_value={})
+        mock_state.update_data = AsyncMock()
+        mock_state.set_state = AsyncMock()
+        mock_state.clear = AsyncMock()
         
-        await work_format.handle_work_format(mock_message)
+        await work_format.handle_work_format(mock_message, mock_state)
         
-        # Проверяем, что формат сохранён
-        work_day = await get_work_day(mock_message.from_user.id, today)
-        assert work_day is not None
-        assert work_day["status"] == format_text
-        
-        # Должно быть отправлено подтверждение
-        mock_message.answer.assert_called_once()
-        call_args = mock_message.answer.call_args
-        assert format_text.lower() in call_args[0][0].lower()
+        # Для форматов с диапазоном дат проверяем, что был запрошен диапазон
+        if format_text in work_format.DATE_RANGE_FORMATS:
+            # Проверяем, что было запрошено ввод диапазона дат
+            mock_message.answer.assert_called_once()
+            call_args = mock_message.answer.call_args
+            assert "диапазон дат" in call_args[0][0].lower() or "диапазон" in call_args[0][0].lower()
+        else:
+            # Проверяем, что формат сохранён
+            work_day = await get_work_day(mock_message.from_user.id, today)
+            assert work_day is not None
+            assert work_day["status"] == format_text
+            
+            # Должно быть отправлено подтверждение
+            mock_message.answer.assert_called_once()
+            call_args = mock_message.answer.call_args
+            assert format_text.lower() in call_args[0][0].lower()
 
 
 @pytest.mark.asyncio
-async def test_handle_work_format_unregistered_user(test_db, mock_message):
+async def test_handle_work_format_unregistered_user(test_db, mock_message, mock_state):
     """Тест: выбор формата незарегистрированным пользователем."""
     mock_message.text = "Офис"
     
-    await work_format.handle_work_format(mock_message)
+    await work_format.handle_work_format(mock_message, mock_state)
     
     # Должно быть отправлено сообщение о блокировке
     mock_message.answer.assert_called_once()
@@ -320,7 +332,7 @@ async def test_handle_work_format_unregistered_user(test_db, mock_message):
 
 
 @pytest.mark.asyncio
-async def test_handle_work_format_no_consent(test_db, mock_message):
+async def test_handle_work_format_no_consent(test_db, mock_message, mock_state):
     """Тест: выбор формата пользователем без согласия."""
     # Создаём пользователя без согласия
     await create_user(
@@ -333,7 +345,7 @@ async def test_handle_work_format_no_consent(test_db, mock_message):
     
     mock_message.text = "Офис"
     
-    await work_format.handle_work_format(mock_message)
+    await work_format.handle_work_format(mock_message, mock_state)
     
     # Должно быть отправлено сообщение о необходимости согласия
     mock_message.answer.assert_called_once()
@@ -342,7 +354,7 @@ async def test_handle_work_format_no_consent(test_db, mock_message):
 
 
 @pytest.mark.asyncio
-async def test_handle_work_format_inactive_user(test_db, mock_message):
+async def test_handle_work_format_inactive_user(test_db, mock_message, mock_state):
     """Тест: выбор формата неактивным пользователем."""
     # Создаём неактивного пользователя с согласием
     await create_user(
@@ -356,7 +368,7 @@ async def test_handle_work_format_inactive_user(test_db, mock_message):
     
     mock_message.text = "Офис"
     
-    await work_format.handle_work_format(mock_message)
+    await work_format.handle_work_format(mock_message, mock_state)
     
     # Должно быть отправлено сообщение о блокировке
     mock_message.answer.assert_called_once()
@@ -365,7 +377,7 @@ async def test_handle_work_format_inactive_user(test_db, mock_message):
 
 
 @pytest.mark.asyncio
-async def test_handle_work_format_update_existing(test_db, mock_message):
+async def test_handle_work_format_update_existing(test_db, mock_message, mock_state):
     """Тест: обновление существующей записи о формате работы."""
     # Создаём активного пользователя с согласием
     await create_user(
@@ -381,7 +393,11 @@ async def test_handle_work_format_update_existing(test_db, mock_message):
     
     # Сначала выбираем один формат
     mock_message.text = "Офис"
-    await work_format.handle_work_format(mock_message)
+    mock_state.get_data = AsyncMock(return_value={})
+    mock_state.update_data = AsyncMock()
+    mock_state.set_state = AsyncMock()
+    mock_state.clear = AsyncMock()
+    await work_format.handle_work_format(mock_message, mock_state)
     
     # Проверяем, что сохранён "Офис"
     work_day = await get_work_day(mock_message.from_user.id, today)
@@ -390,7 +406,11 @@ async def test_handle_work_format_update_existing(test_db, mock_message):
     # Затем меняем на другой формат
     mock_message.text = "Удалёнка"
     mock_message.answer.reset_mock()
-    await work_format.handle_work_format(mock_message)
+    mock_state.get_data = AsyncMock(return_value={})
+    mock_state.update_data = AsyncMock()
+    mock_state.set_state = AsyncMock()
+    mock_state.clear = AsyncMock()
+    await work_format.handle_work_format(mock_message, mock_state)
     
     # Проверяем, что обновился на "Удалёнка"
     work_day = await get_work_day(mock_message.from_user.id, today)
@@ -400,4 +420,108 @@ async def test_handle_work_format_update_existing(test_db, mock_message):
     mock_message.answer.assert_called_once()
     call_args = mock_message.answer.call_args
     assert "удалёнка" in call_args[0][0].lower()
+
+
+@pytest.mark.asyncio
+async def test_handle_work_format_clear_fsm_state_on_new_format(test_db, mock_message, mock_state):
+    """Тест: очистка состояния FSM при выборе нового формата во время ожидания диапазона дат."""
+    # Создаём активного пользователя с согласием
+    await create_user(
+        tg_id=mock_message.from_user.id,
+        username=mock_message.from_user.username,
+        name=mock_message.from_user.full_name,
+        role="employee",
+        active=True
+    )
+    await update_user_consent(mock_message.from_user.id, True)
+    
+    # Имитируем состояние ожидания диапазона дат
+    mock_state.get_state = AsyncMock(return_value=work_format.WorkFormatStates.waiting_for_date_range)
+    mock_state.get_data = AsyncMock(return_value={"selected_format": "Отпуск"})
+    
+    # Пользователь выбирает новый формат (не требующий диапазона)
+    mock_message.text = "Офис"
+    
+    await work_format.handle_work_format(mock_message, mock_state)
+    
+    # Проверяем, что состояние FSM было очищено
+    assert mock_state.clear.call_count >= 1
+    
+    # Проверяем, что новый формат сохранён
+    today = get_today_date()
+    work_day = await get_work_day(mock_message.from_user.id, today)
+    assert work_day is not None
+    assert work_day["status"] == "Офис"
+    
+    # Должно быть отправлено подтверждение
+    mock_message.answer.assert_called_once()
+    call_args = mock_message.answer.call_args
+    assert "офис" in call_args[0][0].lower()
+
+
+@pytest.mark.asyncio
+async def test_handle_work_format_clear_fsm_state_on_success(test_db, mock_message, mock_state):
+    """Тест: завершение состояния FSM при успешном сохранении формата."""
+    # Создаём активного пользователя с согласием
+    await create_user(
+        tg_id=mock_message.from_user.id,
+        username=mock_message.from_user.username,
+        name=mock_message.from_user.full_name,
+        role="employee",
+        active=True
+    )
+    await update_user_consent(mock_message.from_user.id, True)
+    
+    # Имитируем отсутствие активного состояния FSM
+    mock_state.get_state = AsyncMock(return_value=None)
+    mock_state.get_data = AsyncMock(return_value={})
+    
+    # Пользователь выбирает формат (не требующий диапазона)
+    mock_message.text = "Удалёнка"
+    
+    await work_format.handle_work_format(mock_message, mock_state)
+    
+    # Проверяем, что состояние FSM было очищено (даже если не было активно)
+    mock_state.clear.assert_called_once()
+    
+    # Проверяем, что формат сохранён
+    today = get_today_date()
+    work_day = await get_work_day(mock_message.from_user.id, today)
+    assert work_day is not None
+    assert work_day["status"] == "Удалёнка"
+
+
+@pytest.mark.asyncio
+async def test_handle_work_format_clear_fsm_state_on_error(test_db, mock_message, mock_state):
+    """Тест: завершение состояния FSM при ошибке сохранения формата."""
+    # Создаём активного пользователя с согласием
+    await create_user(
+        tg_id=mock_message.from_user.id,
+        username=mock_message.from_user.username,
+        name=mock_message.from_user.full_name,
+        role="employee",
+        active=True
+    )
+    await update_user_consent(mock_message.from_user.id, True)
+    
+    # Имитируем отсутствие активного состояния FSM
+    mock_state.get_state = AsyncMock(return_value=None)
+    mock_state.get_data = AsyncMock(return_value={})
+    
+    # Мокаем add_work_day чтобы вызвать ошибку
+    with patch('bot.handlers.work_format.add_work_day', new_callable=AsyncMock) as mock_add:
+        mock_add.side_effect = Exception("Ошибка БД")
+        
+        # Пользователь выбирает формат (не требующий диапазона)
+        mock_message.text = "Удалёнка"
+        
+        await work_format.handle_work_format(mock_message, mock_state)
+        
+        # Проверяем, что состояние FSM было очищено даже при ошибке
+        mock_state.clear.assert_called_once()
+        
+        # Должно быть отправлено сообщение об ошибке
+        mock_message.answer.assert_called_once()
+        call_args = mock_message.answer.call_args
+        assert "ошибка" in call_args[0][0].lower()
 
