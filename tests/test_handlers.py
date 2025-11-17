@@ -230,10 +230,10 @@ async def test_cmd_start_updates_test_user_placeholder(test_db, mock_message):
     
     mock_message.text = "/start"
     
-    with patch('bot.handlers.start.get_user_by_username', new_callable=AsyncMock) as mock_get:
+    with patch('bot.database.get_user_by_username', new_callable=AsyncMock) as mock_get:
         mock_get.return_value = {"tg_id": -100, "active_flag": 1}
         
-        with patch('bot.handlers.start.update_user_tg_id', new_callable=AsyncMock) as mock_update:
+        with patch('bot.database.update_user_tg_id', new_callable=AsyncMock) as mock_update:
             mock_update.return_value = True
             
             await start.cmd_start(mock_message)

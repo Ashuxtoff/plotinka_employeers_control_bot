@@ -111,7 +111,18 @@ from bot.database import (
     is_user_admin,
     update_user_tg_id,
     register_admin_if_needed,
+    get_setting,
+    set_setting,
+    get_morning_broadcast_time,
+    get_afternoon_reminder_time,
+    sync_default_time_settings,
+    SETTING_MORNING_TIME,
+    SETTING_AFTERNOON_TIME,
+    get_active_and_consented_users,
+    has_user_answered_today,
+    get_users_without_answer_today,
 )
+from bot.config import MORNING_BROADCAST_TIME, AFTERNOON_REMINDER_TIME
 
 
 @pytest.mark.asyncio
@@ -126,6 +137,55 @@ async def test_init_db(test_db):
             assert "users" in tables
             assert "work_days" in tables
             assert "vacations" in tables
+            assert "settings" in tables
+
+
+@pytest.mark.asyncio
+async def test_settings_defaults_initialized(test_db):
+    """Дефолтные значения времени сохраняются при инициализации."""
+    await sync_default_time_settings()
+    morning = await get_setting(SETTING_MORNING_TIME)
+    afternoon = await get_setting(SETTING_AFTERNOON_TIME)
+    assert morning == MORNING_BROADCAST_TIME
+    assert afternoon == AFTERNOON_REMINDER_TIME
+
+
+@pytest.mark.asyncio
+async def test_set_setting_overrides_value(test_db):
+    """Обновление настройки сохраняет кастомное значение."""
+    new_morning = "09:15"
+    await set_setting(SETTING_MORNING_TIME, new_morning)
+    assert await get_setting(SETTING_MORNING_TIME) == new_morning
+
+    # Повторная синхронизация обновляет значение из переменных окружения
+    await sync_default_time_settings()
+    assert await get_setting(SETTING_MORNING_TIME) == MORNING_BROADCAST_TIME
+
+
+@pytest.mark.asyncio
+async def test_get_morning_time_restores_missing_setting(test_db):
+    """Если запись удалена, она восстанавливается дефолтом."""
+    async with aiosqlite.connect(test_db) as db:
+        await db.execute("DELETE FROM settings WHERE key = ?", (SETTING_MORNING_TIME,))
+        await db.commit()
+
+    value = await get_morning_broadcast_time()
+    assert value == MORNING_BROADCAST_TIME
+    stored_value = await get_setting(SETTING_MORNING_TIME)
+    assert stored_value == MORNING_BROADCAST_TIME
+
+
+@pytest.mark.asyncio
+async def test_get_afternoon_time_restores_missing_setting(test_db):
+    """Время дневного напоминания восстанавливается при отсутствии записи."""
+    async with aiosqlite.connect(test_db) as db:
+        await db.execute("DELETE FROM settings WHERE key = ?", (SETTING_AFTERNOON_TIME,))
+        await db.commit()
+
+    value = await get_afternoon_reminder_time()
+    assert value == AFTERNOON_REMINDER_TIME
+    stored_value = await get_setting(SETTING_AFTERNOON_TIME)
+    assert stored_value == AFTERNOON_REMINDER_TIME
 
 
 @pytest.mark.asyncio
@@ -248,6 +308,40 @@ async def test_get_all_active_users(test_db, sample_user_data, sample_admin_data
     assert sample_user_data["tg_id"] in tg_ids
     assert sample_admin_data["tg_id"] in tg_ids
     assert 111111111 not in tg_ids
+
+
+@pytest.mark.asyncio
+async def test_get_active_and_consented_users(test_db):
+    """Возвращаются только активные пользователи с согласием."""
+    await create_user(
+        tg_id=1,
+        username="active_consent",
+        name="Active Consent",
+        role="employee",
+        active=True
+    )
+    await update_user_consent(1, True)
+
+    await create_user(
+        tg_id=2,
+        username="active_no_consent",
+        name="Active No Consent",
+        role="employee",
+        active=True
+    )
+
+    await create_user(
+        tg_id=3,
+        username="inactive_consent",
+        name="Inactive Consent",
+        role="employee",
+        active=False
+    )
+    await update_user_consent(3, True)
+
+    result = await get_active_and_consented_users()
+    assert len(result) == 1
+    assert result[0]["tg_id"] == 1
 
 
 @pytest.mark.asyncio
@@ -425,6 +519,91 @@ async def test_get_work_days(test_db, sample_user_data):
 
 
 @pytest.mark.asyncio
+async def test_has_user_answered_today_returns_false_when_no_record(test_db, sample_user_data):
+    """Тест проверки ответа: возвращает False, если записи нет."""
+    # Создаём пользователя
+    await create_user(
+        tg_id=sample_user_data["tg_id"],
+        username=sample_user_data["username"],
+        name=sample_user_data["name"],
+        role=sample_user_data["role"]
+    )
+    
+    # Проверяем, что записи нет
+    result = await has_user_answered_today(sample_user_data["tg_id"], "2025-01-15")
+    assert result is False
+
+
+@pytest.mark.asyncio
+async def test_has_user_answered_today_returns_true_when_record_exists(test_db, sample_user_data):
+    """Тест проверки ответа: возвращает True, если запись существует."""
+    # Создаём пользователя
+    await create_user(
+        tg_id=sample_user_data["tg_id"],
+        username=sample_user_data["username"],
+        name=sample_user_data["name"],
+        role=sample_user_data["role"]
+    )
+    
+    # Добавляем рабочий день
+    test_date = "2025-01-15"
+    await add_work_day(sample_user_data["tg_id"], test_date, "office")
+    
+    # Проверяем, что запись есть
+    result = await has_user_answered_today(sample_user_data["tg_id"], test_date)
+    assert result is True
+
+
+@pytest.mark.asyncio
+async def test_has_user_answered_today_different_dates(test_db, sample_user_data):
+    """Тест проверки ответа: проверяет конкретную дату, не все даты."""
+    # Создаём пользователя
+    await create_user(
+        tg_id=sample_user_data["tg_id"],
+        username=sample_user_data["username"],
+        name=sample_user_data["name"],
+        role=sample_user_data["role"]
+    )
+    
+    # Добавляем рабочий день на одну дату
+    await add_work_day(sample_user_data["tg_id"], "2025-01-15", "office")
+    
+    # Проверяем, что на эту дату есть запись
+    assert await has_user_answered_today(sample_user_data["tg_id"], "2025-01-15") is True
+    
+    # Проверяем, что на другую дату записи нет
+    assert await has_user_answered_today(sample_user_data["tg_id"], "2025-01-16") is False
+
+
+@pytest.mark.asyncio
+async def test_has_user_answered_today_different_users(test_db, sample_user_data, sample_admin_data):
+    """Тест проверки ответа: проверяет конкретного пользователя."""
+    # Создаём двух пользователей
+    await create_user(
+        tg_id=sample_user_data["tg_id"],
+        username=sample_user_data["username"],
+        name=sample_user_data["name"],
+        role=sample_user_data["role"]
+    )
+    await create_user(
+        tg_id=sample_admin_data["tg_id"],
+        username=sample_admin_data["username"],
+        name=sample_admin_data["name"],
+        role=sample_admin_data["role"]
+    )
+    
+    # Добавляем рабочий день только для первого пользователя
+    test_date = "2025-01-15"
+    await add_work_day(sample_user_data["tg_id"], test_date, "office")
+    
+    # Проверяем, что первый пользователь ответил
+    assert await has_user_answered_today(sample_user_data["tg_id"], test_date) is True
+    
+    # Проверяем, что второй пользователь не ответил
+    assert await has_user_answered_today(sample_admin_data["tg_id"], test_date) is False
+
+
+@pytest.mark.asyncio
 async def test_add_vacation(test_db, sample_user_data):
     """Тест добавления отпуска."""
     # Создаём пользователя
@@ -508,3 +687,198 @@ async def test_register_admin_if_needed(test_db):
             name="Not Admin"
         )
         assert success is False
+
+
+@pytest.mark.asyncio
+async def test_get_users_without_answer_today_returns_only_users_without_answer(test_db):
+    """Тест получения пользователей без ответа: возвращает только тех, кто не ответил."""
+    # Создаём двух активных пользователей с согласием
+    await create_user(
+        tg_id=1,
+        username="user1",
+        name="User 1",
+        role="employee",
+        active=True
+    )
+    await update_user_consent(1, True)
+    
+    await create_user(
+        tg_id=2,
+        username="user2",
+        name="User 2",
+        role="employee",
+        active=True
+    )
+    await update_user_consent(2, True)
+    
+    # Добавляем ответ только для первого пользователя
+    test_date = "2025-01-15"
+    await add_work_day(1, test_date, "Офис")
+    
+    # Получаем пользователей без ответа
+    users_without_answer = await get_users_without_answer_today(test_date)
+    
+    # Должен быть только второй пользователь
+    assert len(users_without_answer) == 1
+    assert users_without_answer[0]["tg_id"] == 2
+
+
+@pytest.mark.asyncio
+async def test_get_users_without_answer_today_excludes_inactive_users(test_db):
+    """Тест получения пользователей без ответа: исключает неактивных пользователей."""
+    # Создаём активного пользователя с согласием
+    await create_user(
+        tg_id=1,
+        username="active_user",
+        name="Active User",
+        role="employee",
+        active=True
+    )
+    await update_user_consent(1, True)
+    
+    # Создаём неактивного пользователя с согласием
+    await create_user(
+        tg_id=2,
+        username="inactive_user",
+        name="Inactive User",
+        role="employee",
+        active=False
+    )
+    await update_user_consent(2, True)
+    
+    test_date = "2025-01-15"
+    
+    # Получаем пользователей без ответа
+    users_without_answer = await get_users_without_answer_today(test_date)
+    
+    # Должен быть только активный пользователь
+    assert len(users_without_answer) == 1
+    assert users_without_answer[0]["tg_id"] == 1
+    assert users_without_answer[0]["username"] == "active_user"
+
+
+@pytest.mark.asyncio
+async def test_get_users_without_answer_today_excludes_users_without_consent(test_db):
+    """Тест получения пользователей без ответа: исключает пользователей без согласия."""
+    # Создаём активного пользователя с согласием
+    await create_user(
+        tg_id=1,
+        username="with_consent",
+        name="With Consent",
+        role="employee",
+        active=True
+    )
+    await update_user_consent(1, True)
+    
+    # Создаём активного пользователя без согласия
+    await create_user(
+        tg_id=2,
+        username="without_consent",
+        name="Without Consent",
+        role="employee",
+        active=True
+    )
+    # Не даём согласие (consent_given остаётся 0)
+    
+    test_date = "2025-01-15"
+    
+    # Получаем пользователей без ответа
+    users_without_answer = await get_users_without_answer_today(test_date)
+    
+    # Должен быть только пользователь с согласием
+    assert len(users_without_answer) == 1
+    assert users_without_answer[0]["tg_id"] == 1
+    assert users_without_answer[0]["username"] == "with_consent"
+
+
+@pytest.mark.asyncio
+async def test_get_users_without_answer_today_returns_empty_list_when_all_answered(test_db):
+    """Тест получения пользователей без ответа: возвращает пустой список, если все ответили."""
+    # Создаём двух активных пользователей с согласием
+    await create_user(
+        tg_id=1,
+        username="user1",
+        name="User 1",
+        role="employee",
+        active=True
+    )
+    await update_user_consent(1, True)
+    
+    await create_user(
+        tg_id=2,
+        username="user2",
+        name="User 2",
+        role="employee",
+        active=True
+    )
+    await update_user_consent(2, True)
+    
+    # Добавляем ответы для обоих пользователей
+    test_date = "2025-01-15"
+    await add_work_day(1, test_date, "Офис")
+    await add_work_day(2, test_date, "Удалёнка")
+    
+    # Получаем пользователей без ответа
+    users_without_answer = await get_users_without_answer_today(test_date)
+    
+    # Список должен быть пустым
+    assert len(users_without_answer) == 0
+
+
+@pytest.mark.asyncio
+async def test_get_users_without_answer_today_checks_specific_date(test_db):
+    """Тест получения пользователей без ответа: проверяет конкретную дату."""
+    # Создаём активного пользователя с согласием
+    await create_user(
+        tg_id=1,
+        username="user1",
+        name="User 1",
+        role="employee",
+        active=True
+    )
+    await update_user_consent(1, True)
+    
+    # Добавляем ответ на одну дату
+    await add_work_day(1, "2025-01-15", "Офис")
+    
+    # Проверяем, что на эту дату пользователь не в списке
+    users_without_answer = await get_users_without_answer_today("2025-01-15")
+    assert len(users_without_answer) == 0
+    
+    # Проверяем, что на другую дату пользователь в списке
+    users_without_answer = await get_users_without_answer_today("2025-01-16")
+    assert len(users_without_answer) == 1
+    assert users_without_answer[0]["tg_id"] == 1
+
+
+@pytest.mark.asyncio
+async def test_get_users_without_answer_today_uses_today_date_when_no_param(test_db):
+    """Тест получения пользователей без ответа: использует текущую дату, если параметр не указан."""
+    from bot.utils.date_utils import get_today_date
+    
+    # Создаём активного пользователя с согласием
+    await create_user(
+        tg_id=1,
+        username="user1",
+        name="User 1",
+        role="employee",
+        active=True
+    )
+    await update_user_consent(1, True)
+    
+    # Получаем текущую дату
+    today = get_today_date()
+    
+    # Вызываем функцию без параметра
+    users_without_answer = await get_users_without_answer_today()
+    
+    # Пользователь должен быть в списке (так как не ответил на сегодня)
+    assert len(users_without_answer) == 1
+    assert users_without_answer[0]["tg_id"] == 1
+    
+    # Добавляем ответ на сегодня
+    await add_work_day(1, today, "Офис")
+    
+    # Теперь пользователь не должен быть в списке
+    users_without_answer = await get_users_without_answer_today()
+    assert len(users_without_answer) == 0

@@ -1,12 +1,19 @@
 """Точка входа для Telegram-бота."""
 import asyncio
 import logging
+
 from aiogram import Bot, Dispatcher
 
 from bot.config import BOT_TOKEN
-from bot.handlers import start, register, work_format
-from bot.database import init_db, create_default_admin, create_default_test_users, fix_test_users_active_flag
+from bot.database import (
+    init_db,
+    create_default_admin,
+    create_default_test_users,
+    fix_test_users_active_flag,
+)
+from bot.handlers import register, start, work_format
 from bot.middleware import AccessControlMiddleware
+from bot.scheduler import start_scheduler, shutdown_scheduler
 
 logging.basicConfig(
     level=logging.INFO,
@@ -43,9 +50,13 @@ async def main():
     
     logger.info("Бот запущен")
     
+    scheduler = None
     try:
+        scheduler = await start_scheduler(bot)
         await dp.start_polling(bot)
     finally:
+        if scheduler:
+            await shutdown_scheduler(wait=False)
         await bot.session.close()
 
 

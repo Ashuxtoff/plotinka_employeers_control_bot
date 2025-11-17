@@ -6,6 +6,8 @@ load_dotenv()
 
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 TIMEZONE = "Asia/Yekaterinburg"
+MORNING_BROADCAST_TIME = os.getenv("MORNING_BROADCAST_TIME", "08:00")
+AFTERNOON_REMINDER_TIME = os.getenv("AFTERNOON_REMINDER_TIME", "15:00")
 
 # Список администраторов по умолчанию (username без @)
 DEFAULT_ADMINS = ["mirvien", "ashuxtoff"]

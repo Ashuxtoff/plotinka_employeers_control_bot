@@ -5,7 +5,14 @@ from datetime import datetime, timedelta
 from typing import Optional, List, Dict, Any
 import pytz
 
-from bot.config import TIMEZONE, DEFAULT_ADMINS, DEFAULT_TEST_USERS
+from bot.config import (
+    TIMEZONE,
+    DEFAULT_ADMINS,
+    DEFAULT_TEST_USERS,
+    MORNING_BROADCAST_TIME,
+    AFTERNOON_REMINDER_TIME,
+)
+from bot.utils.date_utils import get_today_date
 
 logger = logging.getLogger(__name__)
 
@@ -13,6 +20,14 @@ DB_PATH = "bot_data.db"
 
 # Часовой пояс
 tz = pytz.timezone(TIMEZONE)
+
+SETTING_MORNING_TIME = "morning_broadcast_time"
+SETTING_AFTERNOON_TIME = "afternoon_reminder_time"
+
+DEFAULT_TIME_SETTINGS = {
+    SETTING_MORNING_TIME: MORNING_BROADCAST_TIME,
+    SETTING_AFTERNOON_TIME: AFTERNOON_REMINDER_TIME,
+}
 
 
 def get_current_time() -> str:
@@ -61,9 +76,107 @@ async def init_db():
                 FOREIGN KEY (tg_id) REFERENCES users(tg_id)
             )
         """)
+
+        # Таблица настроек
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS settings (
+                key TEXT PRIMARY KEY,
+                value TEXT NOT NULL
+            )
+        """)
         
         await db.commit()
         logger.info("База данных инициализирована")
+
+    await sync_default_time_settings()
+
+
+async def get_setting(key: str) -> Optional[str]:
+    """
+    Получить значение настройки по ключу.
+
+    Args:
+        key: название настройки
+
+    Returns:
+        Значение настройки или None, если ключ не найден.
+    """
+    async with aiosqlite.connect(DB_PATH) as db:
+        async with db.execute(
+            "SELECT value FROM settings WHERE key = ?",
+            (key,)
+        ) as cursor:
+            row = await cursor.fetchone()
+            return row[0] if row else None
+
+
+async def set_setting(key: str, value: str) -> bool:
+    """
+    Сохранить значение настройки (создать или обновить).
+
+    Args:
+        key: название настройки
+        value: значение настройки
+
+    Returns:
+        True если операция выполнена.
+    """
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute(
+            """
+            INSERT INTO settings (key, value)
+            VALUES (?, ?)
+            ON CONFLICT(key) DO UPDATE SET value = excluded.value
+            """,
+            (key, value)
+        )
+        await db.commit()
+        logger.info("Настройка %s сохранена со значением %s", key, value)
+        return True
+
+
+async def sync_default_time_settings():
+    """Убедиться, что базовые настройки времени присутствуют в БД и обновлены из .env."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        for key, value in DEFAULT_TIME_SETTINGS.items():
+            # Обновляем настройки из переменных окружения при каждом запуске
+            await db.execute(
+                """
+                INSERT INTO settings (key, value)
+                VALUES (?, ?)
+                ON CONFLICT(key) DO UPDATE SET value = excluded.value
+                """,
+                (key, value)
+            )
+        await db.commit()
+        logger.info("Базовые настройки времени синхронизированы из переменных окружения")
+
+
+async def _get_or_create_time_setting(key: str, default_value: str) -> str:
+    """
+    Получить настройку времени или создать с дефолтным значением.
+    """
+    value = await get_setting(key)
+    if value is not None:
+        return value
+    await set_setting(key, default_value)
+    return default_value
+
+
+async def get_morning_broadcast_time() -> str:
+    """Вернуть время утренней рассылки из БД или дефолтное значение."""
+    return await _get_or_create_time_setting(
+        SETTING_MORNING_TIME,
+        MORNING_BROADCAST_TIME,
+    )
+
+
+async def get_afternoon_reminder_time() -> str:
+    """Вернуть время дневного напоминания из БД или дефолтное значение."""
+    return await _get_or_create_time_setting(
+        SETTING_AFTERNOON_TIME,
+        AFTERNOON_REMINDER_TIME,
+    )
 
 
 async def create_user(
@@ -210,6 +323,25 @@ async def get_all_active_users() -> List[Dict[str, Any]]:
         db.row_factory = aiosqlite.Row
         async with db.execute(
             "SELECT * FROM users WHERE active_flag = 1"
+        ) as cursor:
+            rows = await cursor.fetchall()
+            return [dict(row) for row in rows]
+
+
+async def get_active_and_consented_users() -> List[Dict[str, Any]]:
+    """
+    Получить пользователей, которые активны и дали согласие.
+
+    Returns:
+        Список словарей с данными пользователей.
+    """
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        async with db.execute(
+            """
+            SELECT * FROM users
+            WHERE active_flag = 1 AND consent_given = 1
+            """
         ) as cursor:
             rows = await cursor.fetchall()
             return [dict(row) for row in rows]
@@ -502,6 +634,53 @@ async def get_work_day(tg_id: int, date: str) -> Optional[Dict[str, Any]]:
         ) as cursor:
             row = await cursor.fetchone()
             return dict(row) if row else None
+
+
+async def has_user_answered_today(tg_id: int, date: str) -> bool:
+    """
+    Проверить, есть ли запись о рабочем дне для пользователя на указанную дату.
+    
+    Args:
+        tg_id: Telegram ID пользователя
+        date: Дата в формате YYYY-MM-DD
+    
+    Returns:
+        True если запись существует, False иначе
+    """
+    async with aiosqlite.connect(DB_PATH) as db:
+        async with db.execute(
+            "SELECT 1 FROM work_days WHERE tg_id = ? AND date = ?",
+            (tg_id, date)
+        ) as cursor:
+            row = await cursor.fetchone()
+            return row is not None
+
+
+async def get_users_without_answer_today(date: Optional[str] = None) -> List[Dict[str, Any]]:
+    """
+    Получить список активных сотрудников с согласием, у которых нет записи в work_days на указанную дату.
+    
+    Args:
+        date: Дата в формате YYYY-MM-DD. Если не указана, используется текущая дата через get_today_date()
+    
+    Returns:
+        Список словарей с данными пользователей, которые не ответили на указанную дату
+    """
+    # Если дата не указана, используем текущую дату
+    if date is None:
+        date = get_today_date()
+    
+    # Получаем всех активных пользователей с согласием
+    all_active_users = await get_active_and_consented_users()
+    
+    # Фильтруем тех, у кого нет записи на указанную дату
+    users_without_answer = []
+    for user in all_active_users:
+        tg_id = user["tg_id"]
+        if not await has_user_answered_today(tg_id, date):
+            users_without_answer.append(user)
+    
+    return users_without_answer
 
 
 async def get_work_days(
